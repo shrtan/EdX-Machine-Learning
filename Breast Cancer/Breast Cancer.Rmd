@@ -1,0 +1,249 @@
+---
+title: "Breast Cancer Project"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+options(digits = 3)
+library(matrixStats)
+library(tidyverse)
+library(caret)
+library(dslabs)
+data(brca)
+```
+
+Question 1: Dimensions and Properties
+```{r}
+dim(brca$x)
+length(brca$y)
+y <- brca$y
+#proportion of the samples that are malignant
+mean(brca$y == 'M')
+#Which column number has the highest mean?
+which.max(colMeans(brca$x))
+##Which column number has the lowest std dev?
+which.min(colSds(brca$x))
+```
+
+
+Question 2: Scaling the Matrix
+```{r}
+x_centered <- sweep(brca$x, 2, colMeans(brca$x))
+x_scaled <- sweep(x_centered, 2, colSds(brca$x), FUN = "/")
+
+#sd of first column
+apply(x_scaled, 2, sd)
+#median of first column
+apply(x_scaled, 2, median)
+```
+
+
+Question 3: Calculate the distance between all samples using the scaled matrix
+```{r}
+dists <- dist(x_scaled)
+dists <- as.matrix(dists)
+
+#average distance between the first sample, which is benign, and other benign samples
+dists_1 <- dists[1, (y == 'B')]
+mean(dists_1[2:length(dists_1)])
+
+#average distance between the first sample and malignant samples
+dists_2 <- dists[1, (y == 'M')]
+mean(dists_2)
+```
+
+
+Question 4: Make a heatmap of the relationship between features using the scaled matrix
+```{r}
+d_features <- dist(t(x_scaled))
+heatmap(as.matrix(d_features), labRow = NA, labCol = NA)
+```
+
+
+Question 5: Perform hierarchical clustering on the 30 features. Cut the tree into 5 groups.
+```{r}
+hc <- hclust(d_features)
+y_hc <- cutree(hc, k=5)
+
+split(names(y_hc), y_hc)
+```
+
+
+Question 6: Perform a principal component analysis of the scaled matrix
+```{r}
+pca <- prcomp(x_scaled)
+#proportion of variance explained by the first principal component
+summary(pca)
+```
+
+
+Question 7: Plot the first two principal components with color representing tumor type 
+```{r}
+pcs <- data.frame(pca$x[,1:2], type = brca$y)
+ggplot(pcs) + geom_point(aes(PC1, PC2, col = type))
+```
+
+
+Question 8: Make a boxplot of the first 10 PCs grouped by tumor type
+```{r}
+data.frame(type = brca$y, pca$x[,1:10]) %>%
+    gather(key = "PC", value = "value", -type) %>%
+    ggplot(aes(PC, value, fill = type)) +
+    geom_boxplot()
+```
+
+
+Create a data partition splitting brca_y and the scaled version of the brca_x matrix into a 20% test set and 80% train
+```{r}
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(brca$y, times = 1, p = 0.2, list = FALSE)
+test_x <- x_scaled[test_index,]
+test_y <- brca$y[test_index]
+train_x <- x_scaled[-test_index,]
+train_y <- brca$y[-test_index]
+```
+
+
+Question 9: Training and Test sets
+```{r}
+#proportion of the training set that is benign
+mean(train_y == 'B')
+#proportion of the test set that is benign
+mean(test_y == 'B')
+```
+
+
+Question 10a: K-means Clustering
+```{r}
+#two arguments: a matrix of observations x and a k-means object k - and assigns each row of x to a cluster from k
+predict_kmeans <- function(x, k) {
+    centers <- k$centers    # extract cluster centers
+    # calculate distance to cluster centers
+    distances <- sapply(1:nrow(x), function(i){
+                        apply(centers, 1, function(y) dist(rbind(x[i,], y)))
+                 })
+  max.col(-t(distances))  # select cluster with min distance to center
+}
+```
+
+Perform k-means clustering on the training set with 2 centers and assign the output to k
+```{r}
+set.seed(3, sample.kind = "Rounding")
+
+k <- kmeans(train_x, centers = 2)
+kmeans_preds <- ifelse(predict_kmeans(test_x, k) == 1, "B", "M")
+mean(kmeans_preds == test_y)
+```
+
+Question 10b: Proportion of benign and malignant tumors that are correctly identified
+```{r}
+table(test_y,kmeans_preds)
+71/79
+35/36
+```
+
+
+Question 11: Logistic Regression Model
+```{r}
+logistic_model <- train(x = train_x, y = train_y, method = "glm")
+logistic_pred <- predict(logistic_model, test_x)
+mean(logistic_pred == test_y)
+```
+
+
+Question 12: LDA and QDA models
+```{r}
+#lda
+lda_model <- train(x = train_x, y = train_y, method = "lda")
+lda_pred <- predict(lda_model, test_x)
+mean(lda_pred == test_y)
+#qda
+qda_model <- train(x = train_x, y = train_y, method = "qda")
+qda_pred <- predict(qda_model, test_x)
+mean(qda_pred == test_y)
+```
+
+
+Question 13: Loess Model
+```{r}
+set.seed(5, sample.kind = "Rounding")
+loess_model <- train(x = train_x, y = train_y, method = "gamLoess")
+loess_pred <- predict(loess_model, test_x)
+mean(loess_pred == test_y)
+```
+
+
+Question 14: K-nearest neighbors Model
+```{r}
+set.seed(7, sample.kind = "Rounding")
+
+tuning <- data.frame(k = seq(3, 21, 2))
+train_knn <- train(train_x, train_y,
+      method = "knn", 
+      tuneGrid = tuning)
+train_knn$bestTune
+
+knn_pred <- predict(train_knn, test_x)
+mean(knn_pred == test_y)
+
+```
+
+
+Question 15: Random Forest Model
+```{r}
+set.seed(9, sample.kind = "Rounding")
+
+rf_model <- train(x = train_x, y = train_y, method = "rf", tuneGrid = data.frame(mtry = c(3, 5, 7, 9)), importance = TRUE)
+rf_pred <- predict(rf_model, test_x)
+mean(rf_pred == test_y)
+
+#most important variable in the random forest model
+varImp(rf_model)
+```
+
+Consider the top 10 most important variables in the random forest model. Which set of features is most important for determining tumor type?
+```{r}
+varImp(rf_model)
+```
+worst is most important because 6 of the 10 values are worst values
+
+
+Question 16a: Creating an Ensemble
+```{r}
+predictions = data.frame(kmeans=kmeans_preds, logistic=logistic_pred, lda=lda_pred, qda=qda_pred, loess=loess_pred, knn=knn_pred, rf=rf_pred)
+
+#alternate
+y_hat <- ifelse(rowMeans(predictions == 'B') > 0.5, 'B', 'M')
+mean(y_hat == test_y)
+
+final_pred <- apply(predictions, 1, function(row) {
+  prob = mean(row == 'B')
+  ifelse(prob > 0.5, 'B', 'M')
+})
+
+mean(final_pred == test_y)
+
+#alternate method
+# ensemble <- cbind(glm = glm_preds == "B", lda = lda_preds == "B", qda = qda_preds == "B", loess = loess_preds == "B", rf = rf_preds == "B", knn = knn_preds == "B", kmeans = kmeans_preds == "B")
+# 
+# ensemble_preds <- ifelse(rowMeans(ensemble) > 0.5, "B", "M")
+# mean(ensemble_preds == test_y)
+```
+
+
+Make a table of the accuracies of the 7 models and the accuracy of the ensemble model
+```{r}
+predictions <- cbind(predictions, final_pred)
+
+apply(predictions, 2, function(column) {
+  mean(column == test_y)
+})
+```
+
